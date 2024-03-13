@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 import json
 import base64
 import os
@@ -19,30 +20,22 @@ def lambda_handler(event, context):
             'body': json.dumps({'error': 'Missing request body.'})
         }
     else:
-        return performAction(event)
+        return perform_action(event)
 
 
-def performAction(event):
+def perform_action(event):
     try:
-
         action_type, request_body = parse_request_body(event)
 
-        match action_type:
-
-            case "sendGoogleEmail":
-
-                result = send_google_api_email(request_body)
-
-            case "sendGoogleCalendar":
-
-                result = sendGoogleCalendar(request_body)
-
-            case _:
-
-                return {
-                    'statusCode': 400,
-                    'body': json.dumps({'error': 'Invalid or missing actionType'})
-                }
+        if action_type == "sendGoogleEmail":
+            result = send_google_api_email(request_body)
+        elif action_type == "sendGoogleCalendar":
+            result = send_google_api_calendar(request_body)
+        else:
+            return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'Invalid or missing actionType'})
+            }
 
         return {
             'statusCode': 200,
@@ -64,7 +57,7 @@ def parse_request_body(event):
         # Retrieve the actionType from the request body
         action_type = request_body.get('actionType')
 
-        if action_type is None:
+        if action_type is None or request_body is None:
             return {
                 'statusCode': 400,
                 'body': json.dumps({'error': 'Invalid or missing actionType'})
@@ -132,13 +125,13 @@ def send_google_api_email(request_body):
                 .execute()
             )
 
-            return {'statusCode': 200, 'message': f'Email sent successfully to zo-janjic@gl-navi.co.jp {send_message}'}
+            return {'statusCode': 200, 'message': f'Email sent successfully to {user_email_address}'}
 
     except Exception as e:
         return {'statusCode': 500, 'error': f'An error occurred: {str(e)}'}
 
 
-def sendGoogleCalendar(request_body):
+def send_google_api_calendar(request_body):
     try:
         booking_data = request_body.get('booking_data')
 
@@ -148,8 +141,106 @@ def sendGoogleCalendar(request_body):
                 'body': json.dumps({'error': 'Invalid or missing booking_data'})
             }
 
-        return {'statusCode': 200, 'message': f'booking data is {booking_data}'}
+        else:
+
+            credentials = get_service_account_credentials_for_google_calender()
+
+            service = build("calendar", "v3", credentials=credentials)
+
+            response = create_google_calender_event(service, booking_data)
+
+            return {
+                'statusCode': 201,
+                'body': response
+            }
 
 
     except Exception as e:
-        return {'statusCode': 500, 'error': f'An error occurred: {str(e)}'}
+
+        return {'statusCode': 500, 'error': f'booking_data missing from request.'}
+
+
+def create_google_calender_event(service, booking_data):
+    try:
+
+        sessionDuration = calculate_session_duration(booking_data)
+
+        event = {
+            'summary': f"{booking_data['sessionType']} with {booking_data['instructorEmail']} and {booking_data['studentEmail']}",
+            'location': booking_data['location'],
+            'description': booking_data['description'],
+            'sessionDuration': sessionDuration,
+            'start': {
+                'dateTime': booking_data['startTime'],
+                'timeZone': booking_data['timeZone'],
+            },
+            'end': {
+                'dateTime': booking_data['endTime'],
+                'timeZone': booking_data['timeZone'],
+            },
+            'attendees': [
+                {'email': booking_data['instructorEmail']},
+                {'email': booking_data['studentEmail']},
+            ],
+            'reminders': {
+                'useDefault': False,
+                'overrides': [
+                    {'method': 'email', 'minutes': 24 * 60},
+                    {'method': 'popup', 'minutes': 10},
+                ],
+            },
+        }
+
+        calendar_id = 'primary'
+
+        created_event = service.events().insert(calendarId=calendar_id, body=event).execute()
+
+        print(f"Event created: {created_event.get('htmlLink')}\n")
+        print(f"Event id: {created_event.get('id')}\n")
+
+        return {
+            'statusCode': 201,
+            'body': json.dumps({
+                'message': 'Calendar event created successfully',
+                'eventLink': created_event.get('htmlLink'),
+                'eventId': created_event.get('id')
+            })
+        }
+
+    except Exception as e:
+        print(f"Error creating google calendar event: {e}")
+
+
+def get_service_account_credentials_for_google_calender():
+    try:
+        token_uri = os.environ['TOKEN_URI']
+        client_email = os.environ['CLIENT_EMAIL']
+        private_key = os.environ['PRIVATE_KEY'].replace('\\n', '\n')
+
+        credentials_info = {
+            "token_uri": token_uri,
+            "client_email": client_email,
+            "private_key": private_key
+        }
+
+        credentials = service_account.Credentials.from_service_account_info(
+            info=credentials_info,
+            scopes=['https://www.googleapis.com/auth/calendar'],
+            subject='j-aoussou@gl-navi.co.jp'
+        )
+
+        return credentials
+
+    except Exception as e:
+
+        return {'statusCode': 500, 'error': f'An error occurred in get_service_account_credentials: {str(e)}'}
+
+
+def calculate_session_duration(booking_data):
+    # Parse the start and end times
+    start_time = datetime.strptime(booking_data['startTime'], '%Y-%m-%dT%H:%M:%S')
+    end_time = datetime.strptime(booking_data['endTime'], '%Y-%m-%dT%H:%M:%S')
+
+    # Calculate the duration
+    duration = end_time - start_time
+    duration_in_hours = duration.total_seconds() / 3600  # Convert seconds to hours

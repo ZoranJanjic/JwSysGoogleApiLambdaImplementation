@@ -31,6 +31,8 @@ def perform_action(event):
             result = send_google_api_email(request_body)
         elif action_type == "sendGoogleCalendar":
             result = send_google_api_calendar(request_body)
+        elif action_type == "deleteCalendarEvent":
+            result = delete_event(request_body)
         else:
             return {
                 'statusCode': 400,
@@ -163,13 +165,13 @@ def send_google_api_calendar(request_body):
 def create_google_calender_event(service, booking_data):
     try:
 
-        sessionDuration = calculate_session_duration(booking_data)
+        session_duration = calculate_session_duration(booking_data)
 
         event = {
             'summary': f"{booking_data['sessionType']} with {booking_data['instructorEmail']} and {booking_data['studentEmail']}",
             'location': booking_data['location'],
             'description': booking_data['description'],
-            'sessionDuration': sessionDuration,
+            'sessionDuration': session_duration,
             'start': {
                 'dateTime': booking_data['startTime'],
                 'timeZone': booking_data['timeZone'],
@@ -244,3 +246,32 @@ def calculate_session_duration(booking_data):
     # Calculate the duration
     duration = end_time - start_time
     duration_in_hours = duration.total_seconds() / 3600  # Convert seconds to hours
+
+    return duration_in_hours
+
+
+def delete_event(request_body):
+    try:
+        event_id = request_body.get('event_id')
+
+        credentials = get_service_account_credentials_for_google_calender()
+
+        service = build("calendar", "v3", credentials=credentials)
+
+        service.events().delete(calendarId='primary', eventId=event_id).execute()
+
+        print(f"Event with ID {event_id} has been deleted successfully.")
+        return {
+            'statusCode': 200,
+            'body': json.dumps({
+                'message': f"Event with ID {event_id} has been deleted successfully."
+            })
+        }
+    except Exception as e:
+        print(f"An error occurred in deleting event: {e}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({
+                'message': f"Event has not been deleted. Error: {e}"
+            })
+        }
